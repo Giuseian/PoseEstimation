@@ -1,2 +1,2 @@
-# pose_estimation
+# PoseEstimation
 Pose Estimation for Eurobin Project
