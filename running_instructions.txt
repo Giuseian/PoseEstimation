@@ -1,0 +1,39 @@
+Running Instructions for the Pipeline 
+
+
+conda activate sam3 
+
+python pipeline/sam_script_fp.py \
+  --timestamp <timestamp> \
+  --prompt "box" \
+  --image_id 000000
+
+
+conda deactivate 
+
+cd submodules/FoundationPose/
+
+cd docker/
+
+docker start foundationpose
+docker exec -it foundationpose bash
+
+Inside the docker go to "/home/<user>/Documents/GITHUB_PROJECTS/PERSONAL/PoseEstimation"
+
+cd /home/giannotti-iit.local/Documents/GITHUB_PROJECTS/PERSONAL/PoseEstimation
+python ../../pipeline/run_fp_single_frame.py 
+--data_root /home/giannotti-iit.local/Documents/GITHUB_PROJECTS/PERSONAL/PoseEstimation/data 
+--timestamp 2026-05-05_16-32-41 
+--mesh_file meshes/box_green_model/meshes/green_box.obj 
+--start_frame 000000 
+--max_frames 20 
+--est_refine_iter 5 
+--track_refine_iter 2 
+--debug 1
+
+
+python pipeline/compute_pose_metrics.py \
+  --data_root data \
+  --timestamp 2026-05-07_10-32-15
+
+

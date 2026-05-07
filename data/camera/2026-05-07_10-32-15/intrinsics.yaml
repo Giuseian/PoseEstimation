@@ -1,0 +1,25 @@
+K:
+- - 277.19133377075195
+  - 0.0
+  - 160.0
+- - 0.0
+  - 277.1913528442383
+  - 120.0
+- - 0.0
+  - 0.0
+  - 1.0
+camera_info_topic: /D435_head_camera/color/camera_info
+camera_optical_frame: D435_head_camera_gz_optical_frame
+cx: 160.0
+cy: 120.0
+depth_topic: /D435_head_camera/aligned_depth_to_color/image_raw
+fx: 277.19133377075195
+fy: 277.1913528442383
+gazebo_pose_topic: /world/default/pose/info
+gt_object_name: box_red_001
+height: 240
+pelvis_pose_topic: /xbotcore/link_state/pelvis/pose
+rgb_topic: /D435_head_camera/color/image_raw
+run_timestamp: 2026-05-07_10-32-15
+save_root: /home/user/pose_estimation_data
+width: 320

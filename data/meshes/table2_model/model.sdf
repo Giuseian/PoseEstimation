@@ -1,0 +1,30 @@
+<?xml version="1.0"?>
+<sdf version="1.6">
+  <model name="table2_model">
+    <static>true</static>
+
+    <!-- Se vuoi poterlo spostare/urti, metti static=false e aggiungi inertia/mass -->
+    <link name="link">
+      <pose>0 0 0 0 0 0</pose>
+
+      <visual name="visual">
+        <geometry>
+          <mesh>
+            <uri>model://home/user/xbot2_ws/install/share/centauro_gazebo/models/table2_model/meshes/table2.glb</uri>
+            <scale>0.018 0.018 0.018</scale>
+          </mesh>
+        </geometry>
+      </visual>
+
+      <collision name="collision">
+        <geometry>
+          <mesh>
+            <uri>model://home/user/xbot2_ws/install/share/centauro_gazebo/models/table2_model/meshes/table2.glb</uri>
+            <scale>0.018 0.018 0.018</scale>
+          </mesh>
+        </geometry>
+      </collision>
+
+    </link>
+  </model>
+</sdf>

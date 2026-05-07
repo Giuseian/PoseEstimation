@@ -1,6 +1,8 @@
 [submodule "FoundationPose"]
-	path = FoundationPose
+	path = submodules/FoundationPose
 	url = https://github.com/Giuseian/FoundationPose.git
+
 [submodule "SAM3"]
-	path = SAM3
+	path = submodules/SAM3
 	url = https://github.com/Giuseian/sam3.git
+
