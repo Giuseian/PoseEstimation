@@ -1,13 +1,25 @@
 Running Instructions for the Pipeline 
 
 
+
+python3 ~/pose_estimation_scripts/bridge_gz_box_pose.py
+
+
+python3 ~/pose_estimation_scripts/save_gazebo_rgbd.py --capture_hz 20 --gz_pose_timeout 1.0
+
+
+
+
 conda activate sam3 
 
 python pipeline/sam_script_fp.py \
-  --timestamp <timestamp> \
+  --data_root data/realsense \
+  --timestamp 2026-05-09_13-55-10 \
   --prompt "box" \
   --image_id 000000
 
+
+2026-05-09_07-48-35
 
 conda deactivate 
 
@@ -21,19 +33,176 @@ docker exec -it foundationpose bash
 Inside the docker go to "/home/<user>/Documents/GITHUB_PROJECTS/PERSONAL/PoseEstimation"
 
 cd /home/giannotti-iit.local/Documents/GITHUB_PROJECTS/PERSONAL/PoseEstimation
-python ../../pipeline/run_fp_single_frame.py 
---data_root /home/giannotti-iit.local/Documents/GITHUB_PROJECTS/PERSONAL/PoseEstimation/data 
---timestamp 2026-05-05_16-32-41 
---mesh_file meshes/box_green_model/meshes/green_box.obj 
---start_frame 000000 
---max_frames 20 
---est_refine_iter 5 
---track_refine_iter 2 
---debug 1
+python pipeline/run_fp_single_frame.py \
+  --data_root /home/giannotti-iit.local/Documents/GITHUB_PROJECTS/PERSONAL/PoseEstimation/data/realsense \
+  --timestamp 2026-05-08_18-39-08 \
+  --mesh_file meshes/box_big_model/meshes/box_big_model.obj \
+  --start_frame 000003 \
+  --max_frames 20 \
+  --est_refine_iter 5 \
+  --track_refine_iter 2 \
+  --debug 1
+  
 
+python pipeline/run_fp_single_frame.py --data_root /home/giannotti-iit.local/Documents/GITHUB_PROJECTS/PERSONAL/PoseEstimation/data/realsense --timestamp 2026-05-09_13-55-10  --mesh_file meshes/box_amazon_model/meshes/box_amazon_model.obj --start_frame 000000 --est_refine_iter 5 --track_refine_iter 2 --debug 1
+
+
+
+python pipeline/run_fp_single_frame.py \
+  --data_root /home/giannotti-iit.local/Documents/GITHUB_PROJECTS/PERSONAL/PoseEstimation/data \
+  --timestamp 2026-05-07_16-56-31 \
+  --mesh_file meshes/box_big_model/meshes/box_big_model.obj \
+  --start_frame 000133 \
+  --est_refine_iter 5 \
+  --track_refine_iter 2 \
+  --debug 1
+
+
+python pipeline/run_fp_single_frame.py --data_root /home/giannotti-iit.local/Documents/GITHUB_PROJECTS/PERSONAL/PoseEstimation/data --timestamp 2026-05-07_16-56-31 --mesh_file meshes/box_red_model/meshes/red_box.obj --start_frame 000133 --est_refine_iter 5 --track_refine_iter 2 --debug 1
+
+
+
+cd /home/giannotti-iit.local/Documents/GITHUB_PROJECTS/PERSONAL/PoseEstimation
+python pipeline/run_fp_single_frame.py \
+  --data_root /home/giannotti-iit.local/Documents/GITHUB_PROJECTS/PERSONAL/PoseEstimation/data \
+  --timestamp 2026-05-07_16-15-35 \
+  --mesh_file meshes/box_red_model/meshes/red_box.obj \
+  --start_frame 000040 \
+  --est_refine_iter 5 \
+  --track_refine_iter 2 \
+  --debug 1
+
+
+
+2026-05-07_16-15-35
+
+2026-05-07_16-56-31
 
 python pipeline/compute_pose_metrics.py \
   --data_root data \
   --timestamp 2026-05-07_10-32-15
 
 
+
+python pipeline/compute_pose_metrics.py --data_root data --timestamp 2026-05-07_16-56-31
+
+
+2026-05-07_13-36-52
+
+
+ros2 launch realsense2_camera rs_launch.py
+
+ros2 run rqt_image_view rqt_image_view 
+
+ros2 param set /camera/camera align_depth.enable true
+
+
+
+python3 ~/pose_estimation_scripts/save_realsense_rgbd.py --capture_hz 30 --resize_width 640 --resize_height 360
+
+
+
+
+
+
+Certo.
+
+**Gazebo**
+Prima avvia il bridge della posa box:
+
+```bash
+python3 ~/pose_estimation_scripts/bridge_gz_box_pose.py
+```
+
+Poi in un secondo terminale:
+
+```bash
+python3 ~/pose_estimation_scripts/save_gazebo_rgbd.py --capture_hz 20 --gz_pose_timeout 1.0
+```
+
+Output salvato in:
+
+```text
+~/pose_estimation_data/gazebo/rgb/<timestamp>
+~/pose_estimation_data/gazebo/depth/<timestamp>/npy
+~/pose_estimation_data/gazebo/depth/<timestamp>/png
+~/pose_estimation_data/gazebo/camera/<timestamp>
+~/pose_estimation_data/gazebo/gt/<timestamp>/ob_in_cam
+```
+
+Per usarlo poi nella repo:
+
+```bash
+python pipeline/run_fp_single_frame.py --data_root data/gazebo --timestamp <timestamp> ...
+```
+
+**RealSense**
+Prima abilita la depth allineata:
+
+```bash
+ros2 param set /camera/camera align_depth.enable true
+```
+
+Verifica se vuoi:
+
+```bash
+ros2 topic list | grep aligned
+```
+
+Poi lancia:
+
+```bash
+python3 ~/pose_estimation_scripts/save_realsense_rgbd.py --capture_hz 10
+```
+
+Output salvato in:
+
+```text
+~/pose_estimation_data/realsense/rgb/<timestamp>
+~/pose_estimation_data/realsense/depth/<timestamp>/npy
+~/pose_estimation_data/realsense/depth/<timestamp>/png
+~/pose_estimation_data/realsense/camera/<timestamp>
+```
+
+Per usarlo poi nella repo:
+
+```bash
+python pipeline/run_fp_single_frame.py --data_root data/realsense --timestamp <timestamp> ...
+```
+
+**Frequenza RealSense**
+La camera pubblica a circa `30 Hz`, ma lo script non salva tutti i frame: salva con un timer ROS alla frequenza scelta da:
+
+```bash
+--capture_hz
+```
+
+Default:
+
+```text
+10 Hz
+```
+
+Quindi con:
+
+```bash
+python3 ~/pose_estimation_scripts/save_realsense_rgbd.py --capture_hz 10
+```
+
+salva circa 10 frame al secondo, prendendo l’ultimo RGB e l’ultima depth aligned disponibili in quel momento.
+
+In più controlla che RGB e depth siano abbastanza vicini temporalmente:
+
+```text
+--max_rgb_depth_dt 0.05
+```
+
+cioè massimo 50 ms di differenza tra timestamp RGB e depth. Se la differenza è maggiore, quel frame viene saltato.
+
+Se vuoi più frame puoi fare, per esempio:
+
+```bash
+python3 ~/pose_estimation_scripts/save_realsense_rgbd.py --capture_hz 30
+```
+
+Dato che la camera pubblica a 30 Hz, questo è circa il massimo sensato. Per iniziare io userei `10` o `15 Hz`; se il salvataggio regge bene, puoi salire a `30 Hz`.

@@ -1,7 +1,6 @@
+### python3 ~/pose_estimation_scripts/save_gazebo_rgbd.py --capture_hz 20 --gz_pose_timeout 1.0
+import argparse
 import os
-import select
-import subprocess
-import time
 from datetime import datetime
 
 import yaml
@@ -56,60 +55,16 @@ def transform_msg_to_matrix(msg):
     return make_transform_matrix(msg.transform.translation, msg.transform.rotation)
 
 
-def parse_gz_pose_block(block):
-    pose = {
-        "name": None,
-        "position": {"x": 0.0, "y": 0.0, "z": 0.0},
-        "orientation": {"x": 0.0, "y": 0.0, "z": 0.0, "w": 1.0},
-    }
-    section = None
-
-    for raw_line in block:
-        line = raw_line.strip()
-
-        if line.startswith("name:"):
-            pose["name"] = line.split(":", 1)[1].strip().strip('"')
-        elif line == "position {":
-            section = "position"
-        elif line == "orientation {":
-            section = "orientation"
-        elif line == "}":
-            section = None
-        elif section in ("position", "orientation") and ":" in line:
-            key, value = line.split(":", 1)
-            key = key.strip()
-            if key in pose[section]:
-                pose[section][key] = float(value.strip())
-
-    return pose
-
-
-def gz_pose_to_matrix(pose):
-    class Vector:
-        pass
-
-    position = Vector()
-    orientation = Vector()
-
-    position.x = pose["position"]["x"]
-    position.y = pose["position"]["y"]
-    position.z = pose["position"]["z"]
-
-    orientation.x = pose["orientation"]["x"]
-    orientation.y = pose["orientation"]["y"]
-    orientation.z = pose["orientation"]["z"]
-    orientation.w = pose["orientation"]["w"]
-
-    return make_transform_matrix(position, orientation)
-
-
 class RGBDDataSaver(Node):
-    def __init__(self):
+    def __init__(self, capture_hz: float = 1.0, gz_pose_timeout: float = 1.0):
         super().__init__("rgbd_data_saver")
 
         self.bridge = CvBridge()
+        if capture_hz <= 0.0:
+            raise ValueError("capture_hz must be greater than 0")
 
-        self.save_dir = os.path.expanduser("~/pose_estimation_data")
+        self.save_root = os.path.expanduser("~/pose_estimation_data")
+        self.save_dir = os.path.join(self.save_root, "gazebo")
         self.run_timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
 
         self.rgb_dir = os.path.join(self.save_dir, "rgb", self.run_timestamp)
@@ -134,6 +89,7 @@ class RGBDDataSaver(Node):
         self.rgb_msg = None
         self.depth_msg = None
         self.pelvis_pose_msg = None
+        self.box_pose_msg = None
         self.K_saved = False
         self.frame_id = 0
 
@@ -142,10 +98,11 @@ class RGBDDataSaver(Node):
         self.camera_info_topic = "/D435_head_camera/color/camera_info"
         self.pelvis_pose_topic = "/xbotcore/link_state/pelvis/pose"
         self.gazebo_pose_topic = "/world/default/pose/info"
+        self.box_world_pose_topic = "/gt/box_red_001/world_pose"
         self.gt_object_name = "box_red_001"
         self.pelvis_frame = "pelvis"
         self.camera_optical_frame = "D435_head_camera_gz_optical_frame"
-        self.gz_pose_timeout = 1.0
+        self.gz_pose_timeout = gz_pose_timeout
 
         self.tf_buffer = tf2_ros.Buffer()
         self.tf_listener = tf2_ros.TransformListener(self.tf_buffer, self)
@@ -154,11 +111,14 @@ class RGBDDataSaver(Node):
         self.create_subscription(Image, self.depth_topic, self.depth_callback, 10)
         self.create_subscription(CameraInfo, self.camera_info_topic, self.camera_info_callback, 10)
         self.create_subscription(PoseStamped, self.pelvis_pose_topic, self.pelvis_pose_callback, 10)
+        self.create_subscription(PoseStamped, self.box_world_pose_topic, self.box_pose_callback, 100)
 
-        self.timer = self.create_timer(1.0, self.save_frame)
+        self.timer = self.create_timer(1.0 / capture_hz, self.save_frame)
 
         self.get_logger().info(f"Saving data to: {self.save_dir}")
         self.get_logger().info(f"Run timestamp: {self.run_timestamp}")
+        self.get_logger().info(f"Capture rate: {capture_hz:.3f} Hz")
+        self.get_logger().info(f"Reading box world pose from: {self.box_world_pose_topic}")
         self.get_logger().info(f"Saving GT poses to: {self.gt_pose_dir}")
 
     def rgb_callback(self, msg):
@@ -169,6 +129,9 @@ class RGBDDataSaver(Node):
 
     def pelvis_pose_callback(self, msg):
         self.pelvis_pose_msg = msg
+
+    def box_pose_callback(self, msg):
+        self.box_pose_msg = msg
 
     def camera_info_callback(self, msg):
         if self.K_saved:
@@ -189,10 +152,12 @@ class RGBDDataSaver(Node):
             "camera_info_topic": self.camera_info_topic,
             "pelvis_pose_topic": self.pelvis_pose_topic,
             "gazebo_pose_topic": self.gazebo_pose_topic,
+            "box_world_pose_topic": self.box_world_pose_topic,
             "gt_object_name": self.gt_object_name,
             "camera_optical_frame": self.camera_optical_frame,
             "run_timestamp": self.run_timestamp,
-            "save_root": self.save_dir,
+            "save_root": self.save_root,
+            "dataset_root": self.save_dir,
         }
 
         out_path = os.path.join(self.camera_dir, "intrinsics.yaml")
@@ -202,70 +167,13 @@ class RGBDDataSaver(Node):
         self.get_logger().info(f"Saved camera intrinsics to {out_path}")
         self.K_saved = True
 
-    def read_gazebo_pose(self, target_name):
-        cmd = ["gz", "topic", "-e", "-t", self.gazebo_pose_topic]
-        try:
-            proc = subprocess.Popen(
-                cmd,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                text=True,
-            )
-        except OSError as exc:
-            self.get_logger().warn(f"Could not run {' '.join(cmd)}: {exc}")
-            return None
-
-        deadline = time.monotonic() + self.gz_pose_timeout
-        in_pose = False
-        depth = 0
-        block = []
-
-        try:
-            while time.monotonic() < deadline:
-                remaining = max(0.0, deadline - time.monotonic())
-                ready, _, _ = select.select([proc.stdout], [], [], remaining)
-                if not ready:
-                    break
-
-                line = proc.stdout.readline()
-                if line == "":
-                    break
-
-                stripped = line.strip()
-
-                if not in_pose and stripped == "pose {":
-                    in_pose = True
-                    depth = 1
-                    block = [line]
-                    continue
-
-                if not in_pose:
-                    continue
-
-                block.append(line)
-                depth += stripped.count("{")
-                depth -= stripped.count("}")
-
-                if depth == 0:
-                    pose = parse_gz_pose_block(block)
-                    if pose["name"] == target_name:
-                        return pose
-
-                    in_pose = False
-                    block = []
-
-        finally:
-            proc.terminate()
-            try:
-                proc.wait(timeout=0.2)
-            except subprocess.TimeoutExpired:
-                proc.kill()
-
-        return None
-
     def get_gt_pose_in_camera(self):
         if self.pelvis_pose_msg is None:
             self.get_logger().warn("Waiting for pelvis pose...")
+            return None
+
+        if self.box_pose_msg is None:
+            self.get_logger().warn(f"Waiting for box pose on {self.box_world_pose_topic}...")
             return None
 
         if self.pelvis_pose_msg.header.frame_id != "world":
@@ -274,10 +182,9 @@ class RGBDDataSaver(Node):
             )
             return None
 
-        box_pose = self.read_gazebo_pose(self.gt_object_name)
-        if box_pose is None:
+        if self.box_pose_msg.header.frame_id != "world":
             self.get_logger().warn(
-                f"Could not read {self.gt_object_name} from {self.gazebo_pose_topic}"
+                f"Expected box pose in world, got frame_id={self.box_pose_msg.header.frame_id}"
             )
             return None
 
@@ -296,19 +203,20 @@ class RGBDDataSaver(Node):
         t_world_pelvis = pose_msg_to_matrix(self.pelvis_pose_msg)
         t_pelvis_cam = transform_msg_to_matrix(tf_pelvis_cam)
         t_world_cam = t_world_pelvis @ t_pelvis_cam
-        t_world_box = gz_pose_to_matrix(box_pose)
+        t_world_box = pose_msg_to_matrix(self.box_pose_msg)
 
-        return np.linalg.inv(t_world_cam) @ t_world_box
+        return np.linalg.inv(t_world_cam) @ t_world_box, self.box_pose_msg
 
     def save_frame(self):
         if self.rgb_msg is None or self.depth_msg is None:
             self.get_logger().warn("Waiting for RGB and depth messages...")
             return
 
-        gt_pose = self.get_gt_pose_in_camera()
-        if gt_pose is None:
+        gt_result = self.get_gt_pose_in_camera()
+        if gt_result is None:
             self.get_logger().warn("Skipping frame because GT pose is not available.")
             return
+        gt_pose, box_pose = gt_result
 
         rgb = self.bridge.imgmsg_to_cv2(self.rgb_msg, desired_encoding="rgb8")
         rgb_bgr = cv2.cvtColor(rgb, cv2.COLOR_RGB2BGR)
@@ -347,6 +255,12 @@ class RGBDDataSaver(Node):
             f"rgb={rgb.shape}, depth={depth.shape}, "
             f"depth_encoding={self.depth_msg.encoding}, "
             f"depth_min={depth_min:.3f}, depth_max={depth_max:.3f}, "
+            f"box_world=[{box_pose.pose.position.x:.3f}, "
+            f"{box_pose.pose.position.y:.3f}, "
+            f"{box_pose.pose.position.z:.3f}] m, "
+            f"gt_t_cam=[{gt_pose[0, 3]:.3f}, "
+            f"{gt_pose[1, 3]:.3f}, "
+            f"{gt_pose[2, 3]:.3f}] m, "
             f"gt_pose={gt_pose_path}"
         )
 
@@ -354,8 +268,26 @@ class RGBDDataSaver(Node):
 
 
 def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument(
+        "--capture_hz",
+        type=float,
+        default=1.0,
+        help="Frame capture frequency in Hz.",
+    )
+    parser.add_argument(
+        "--gz_pose_timeout",
+        type=float,
+        default=1.0,
+        help="Kept for command compatibility; box pose is read from the ROS2 bridge topic.",
+    )
+    args = parser.parse_args()
+
     rclpy.init()
-    node = RGBDDataSaver()
+    node = RGBDDataSaver(
+        capture_hz=args.capture_hz,
+        gz_pose_timeout=args.gz_pose_timeout,
+    )
     rclpy.spin(node)
     node.destroy_node()
     rclpy.shutdown()
@@ -363,6 +295,8 @@ def main():
 
 if __name__ == "__main__":
     main()
+
+
 
 
 
@@ -532,5 +466,3 @@ if __name__ == "__main__":
 
 # if __name__ == "__main__":
 #     main()
-
-

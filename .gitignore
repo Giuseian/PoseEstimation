@@ -2,3 +2,8 @@ FoundationPose/demo_data/
 
 FoundationPose/weights/
 
+data/ 
+
+data_old/
+
+pipeline/__pycache__/
