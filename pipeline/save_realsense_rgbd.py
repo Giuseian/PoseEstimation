@@ -214,23 +214,27 @@ def main():
     parser.add_argument(
         "--save_dir",
         type=str,
-        default="~/pose_estimation_data",
+        #default="~/pose_estimation_data",
+        default="~/shared_data",
         help="Root directory where rgb/depth/camera folders are saved.",
     )
     parser.add_argument(
         "--rgb_topic",
         type=str,
-        default="/camera/camera/color/image_raw",
+        #default="/camera/camera/color/image_raw",
+        default="/head_cam/color/image_raw",
     )
     parser.add_argument(
         "--depth_topic",
         type=str,
-        default="/camera/camera/aligned_depth_to_color/image_raw",
+        #default="/camera/camera/aligned_depth_to_color/image_raw",
+        default="/head_cam/aligned_depth_to_color/image_raw",
     )
     parser.add_argument(
         "--camera_info_topic",
         type=str,
-        default="/camera/camera/color/camera_info",
+        #default="/camera/camera/color/camera_info",
+        default="/head_cam/color/camera_info",
     )
     parser.add_argument(
         "--max_rgb_depth_dt",
