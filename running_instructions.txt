@@ -1,20 +1,16 @@
 Running Instructions for the Pipeline 
 
-
-
 python3 ~/pose_estimation_scripts/bridge_gz_box_pose.py
 
 
 python3 ~/pose_estimation_scripts/save_gazebo_rgbd.py --capture_hz 20 --gz_pose_timeout 1.0
 
 
-
-
 conda activate sam3 
 
 python pipeline/sam_script_fp.py \
   --data_root data/realsense \
-  --timestamp 2026-05-09_13-55-10 \
+  --timestamp 2026-05-29_16-13-38 \
   --prompt "box" \
   --image_id 000000
 
@@ -35,9 +31,9 @@ Inside the docker go to "/home/<user>/Documents/GITHUB_PROJECTS/PERSONAL/PoseEst
 cd /home/giannotti-iit.local/Documents/GITHUB_PROJECTS/PERSONAL/PoseEstimation
 python pipeline/run_fp_single_frame.py \
   --data_root /home/giannotti-iit.local/Documents/GITHUB_PROJECTS/PERSONAL/PoseEstimation/data/realsense \
-  --timestamp 2026-05-08_18-39-08 \
-  --mesh_file meshes/box_big_model/meshes/box_big_model.obj \
-  --start_frame 000003 \
+  --timestamp 2026-05-29_16-13-38 \
+  --mesh_file meshes/box_amazon_model/meshes/box_amazon_model.obj \
+  --start_frame 000000 \
   --max_frames 20 \
   --est_refine_iter 5 \
   --track_refine_iter 2 \
@@ -96,16 +92,18 @@ ros2 run rqt_image_view rqt_image_view
 
 ros2 param set /camera/camera align_depth.enable true
 
+ros2 param /head_cam align_depth.enable true
+
 
 
 python3 ~/pose_estimation_scripts/save_realsense_rgbd.py --capture_hz 30 --resize_width 640 --resize_height 360
 
 
+python3 ~/pipeline/save_realsense_rgbd.py --capture_hz 30 --resize_width 640 --resize_height 360
 
 
 
-
-Certo.
+### OFFICIAL RUNNING INSTRUCTIONS
 
 **Gazebo**
 Prima avvia il bridge della posa box:
