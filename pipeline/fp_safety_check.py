@@ -1,9 +1,17 @@
 #!/usr/bin/env python3
 
 """
+run_vlm python /workspace/PoseEstimation/pipeline/fp_safety_check.py \
+  --data-dir /workspace/shared_data/realsense \
+  --latest \
+  --no-popup
+
+
+run_vlm python /workspace/PoseEstimation/pipeline/fp_safety_check.py \
+  --data-dir /workspace/shared_data/realsense \
+  --timestamp 2026-06-12_15-44-38
 
 """
-
 
 
 import argparse
