@@ -1,13 +1,19 @@
 """
-python pipeline/sam_script_fp.py \
-  --timestamp 2026-05-07_10-32-15 \
-  --prompt "box" \
-  --image_id 000000
+Run SAM3 for every prompt listed in:
+  /workspace/shared_data/realsense/objects/<latest_timestamp>/sam3_prompts.json
+
+Masks are saved under:
+  /workspace/shared_data/realsense/masks_by_object/<timestamp>/<object_id>/000000.png
+
+Run:
+python /workspace/PoseEstimation/pipeline/sam_script_fp.py
 """
 
 import os
 import gc
 import argparse
+import json
+import re
 import traceback
 from pathlib import Path
 
@@ -23,6 +29,106 @@ from sam3.model.sam3_image_processor import Sam3Processor
 
 def log(message: str) -> None:
     print(f"[SAM3] {message}")
+
+
+def slugify_prompt(prompt: str) -> str:
+    slug = prompt.strip().lower()
+    slug = re.sub(r"[^a-z0-9]+", "_", slug)
+    slug = slug.strip("_")
+    return slug or "object"
+
+
+def get_latest_timestamp(root: Path) -> str:
+    if not root.exists():
+        raise FileNotFoundError(f"Timestamp root does not exist: {root}")
+
+    timestamp_dirs = sorted(
+        [path for path in root.iterdir() if path.is_dir()],
+        key=lambda path: path.stat().st_mtime,
+    )
+
+    if not timestamp_dirs:
+        raise RuntimeError(f"No timestamp folders found in: {root}")
+
+    return timestamp_dirs[-1].name
+
+
+def resolve_prompts_path(
+    data_root: Path,
+    timestamp: str | None,
+    prompts_path: str | None,
+    require_prompts_file: bool,
+) -> tuple[Path, str]:
+    if prompts_path is not None:
+        resolved_path = Path(prompts_path).resolve()
+        if timestamp is None:
+            timestamp = resolved_path.parent.name
+    else:
+        objects_root = data_root / "objects"
+        if timestamp is None:
+            timestamp = get_latest_timestamp(objects_root)
+        resolved_path = objects_root / timestamp / "sam3_prompts.json"
+
+    if require_prompts_file and not resolved_path.exists():
+        raise FileNotFoundError(f"SAM3 prompts file not found: {resolved_path}")
+    if timestamp is None:
+        raise ValueError("Could not resolve timestamp from prompts path.")
+
+    return resolved_path, timestamp
+
+
+def load_prompt_list(prompts_path: Path, fallback_prompt: str | None) -> list[dict]:
+    if fallback_prompt is not None and fallback_prompt.strip():
+        prompt = fallback_prompt.strip()
+        return [
+            {
+                "object_id": slugify_prompt(prompt),
+                "prompt": prompt,
+            }
+        ]
+
+    data = json.loads(prompts_path.read_text(encoding="utf-8"))
+    if not isinstance(data, list):
+        raise ValueError(f"SAM3 prompts file must contain a JSON list: {prompts_path}")
+
+    prompts: list[dict] = []
+    for index, item in enumerate(data):
+        if isinstance(item, str):
+            prompt = item.strip()
+            if not prompt:
+                raise ValueError(f"SAM3 prompt at index {index} must be non-empty.")
+            prompts.append(
+                {
+                    "object_id": slugify_prompt(prompt),
+                    "prompt": prompt,
+                }
+            )
+            continue
+
+        if isinstance(item, dict):
+            object_id = item.get("object_id")
+            prompt = item.get("prompt")
+            if not isinstance(object_id, str) or not object_id.strip():
+                raise ValueError(f"SAM3 object_id at index {index} must be non-empty.")
+            if not isinstance(prompt, str) or not prompt.strip():
+                raise ValueError(f"SAM3 prompt at index {index} must be non-empty.")
+            prompts.append(
+                {
+                    **item,
+                    "object_id": object_id.strip(),
+                    "prompt": prompt.strip(),
+                }
+            )
+            continue
+
+        raise ValueError(
+            f"SAM3 prompt item at index {index} must be a string or JSON object."
+        )
+
+    if not prompts:
+        raise ValueError(f"SAM3 prompts file is empty: {prompts_path}")
+
+    return prompts
 
 
 def prepare_masks(masks: torch.Tensor) -> np.ndarray:
@@ -174,27 +280,43 @@ def segment_image(
 
 def main():
     parser = argparse.ArgumentParser()
-    default_data_root = Path(__file__).resolve().parents[1] / "data"
+    default_data_root = Path("/workspace/shared_data/realsense")
 
     parser.add_argument(
         "--data_root",
         type=str,
         default=str(default_data_root),
-        help="Root directory containing rgb/depth/camera/masks folders.",
+        help="Root directory containing rgb/depth/camera/objects folders.",
     )
 
     parser.add_argument(
         "--timestamp",
         type=str,
-        required=True,
-        help="Timestamp folder to process, e.g. 2026-05-05_16-35-12.",
+        default=None,
+        help=(
+            "Timestamp folder to process. If omitted, the latest folder under "
+            "data_root/objects is used."
+        ),
     )
 
     parser.add_argument(
         "--prompt",
         type=str,
-        required=True,
-        help="Text prompt for SAM3, e.g. 'green box' or 'box'.",
+        default=None,
+        help=(
+            "Optional single text prompt for SAM3. If omitted, prompts are loaded "
+            "from data_root/objects/<timestamp>/sam3_prompts.json."
+        ),
+    )
+
+    parser.add_argument(
+        "--prompts_path",
+        type=str,
+        default=None,
+        help=(
+            "Optional explicit path to sam3_prompts.json. If omitted, uses "
+            "data_root/objects/<timestamp>/sam3_prompts.json."
+        ),
     )
 
     parser.add_argument(
@@ -215,8 +337,8 @@ def main():
     parser.add_argument(
         "--image_id",
         type=str,
-        default=None,
-        help="Optional single image id, e.g. 000000. If omitted, all PNG images are processed.",
+        default="000000",
+        help="Image id to process, e.g. 000000.",
     )
 
     args = parser.parse_args()
@@ -238,9 +360,20 @@ def main():
             torch.cuda.empty_cache()
 
         data_root = Path(args.data_root)
-        rgb_dir = data_root / "rgb" / args.timestamp
-        masks_dir = data_root / "masks" / args.timestamp
-        masks_dir.mkdir(parents=True, exist_ok=True)
+        prompts_path, timestamp = resolve_prompts_path(
+            data_root=data_root,
+            timestamp=args.timestamp,
+            prompts_path=args.prompts_path,
+            require_prompts_file=args.prompt is None,
+        )
+        prompts = load_prompt_list(
+            prompts_path=prompts_path,
+            fallback_prompt=args.prompt,
+        )
+
+        rgb_dir = data_root / "rgb" / timestamp
+        masks_root = data_root / "masks_by_object" / timestamp
+        masks_root.mkdir(parents=True, exist_ok=True)
 
         if not rgb_dir.exists():
             raise FileNotFoundError(f"RGB directory does not exist: {rgb_dir}")
@@ -250,14 +383,15 @@ def main():
 
         log(f"SAM3 root: {sam3_root}")
         log(f"BPE path: {bpe_path}")
+        log(f"Timestamp: {timestamp}")
+        log(f"Prompts file: {prompts_path}")
+        log(f"Prompt records: {prompts}")
+        log(f"Output root: {masks_root}")
 
         model = build_sam3_image_model(bpe_path=str(bpe_path))
         processor = Sam3Processor(model, confidence_threshold=0.5)
 
-        if args.image_id is not None:
-            image_paths = [rgb_dir / f"{args.image_id}.png"]
-        else:
-            image_paths = sorted(rgb_dir.glob("*.png"))
+        image_paths = [rgb_dir / f"{args.image_id}.png"]
 
         if len(image_paths) == 0:
             raise RuntimeError(f"No PNG images found in: {rgb_dir}")
@@ -266,20 +400,27 @@ def main():
             if not image_path.exists():
                 raise FileNotFoundError(f"Image not found: {image_path}")
 
-            frame_id = image_path.stem
-            output_path = masks_dir / f"{frame_id}.png"
-
             log(f"Processing {image_path}")
-            binary_mask = segment_image(
-                processor=processor,
-                image_path=image_path,
-                prompt=args.prompt,
-                score_threshold=args.score_threshold,
-                mask_mode=args.mask_mode,
-            )
 
-            Image.fromarray(binary_mask, mode="L").save(output_path)
-            log(f"Saved mask to {output_path}")
+            frame_id = image_path.stem
+            for prompt_record in prompts:
+                object_id = prompt_record["object_id"]
+                prompt = prompt_record["prompt"]
+                object_mask_dir = masks_root / object_id
+                object_mask_dir.mkdir(parents=True, exist_ok=True)
+                output_path = object_mask_dir / f"{frame_id}.png"
+
+                log(f"Prompt: {prompt!r} -> object_id={object_id}")
+                binary_mask = segment_image(
+                    processor=processor,
+                    image_path=image_path,
+                    prompt=prompt,
+                    score_threshold=args.score_threshold,
+                    mask_mode=args.mask_mode,
+                )
+
+                Image.fromarray(binary_mask, mode="L").save(output_path)
+                log(f"Saved mask to {output_path}")
 
         log("Done")
 
