@@ -209,6 +209,26 @@ def save_poses_json(
     return poses_path
 
 
+def make_tree_writable_for_shared_volume(path: Path) -> None:
+    """Relax permissions so the robot_docker user can write poses_world.json."""
+    try:
+        for root, dirs, files in os.walk(path):
+            for directory in dirs:
+                os.chmod(Path(root) / directory, 0o777)
+            for file in files:
+                os.chmod(Path(root) / file, 0o666)
+
+        os.chmod(path, 0o777)
+
+        print(f"[FP] Relaxed shared-volume permissions for: {path}")
+
+    except Exception as exc:
+        print(f"[FP][WARN] Could not relax permissions for shared output: {path}")
+        print(f"[FP][WARN] Reason: {exc}")
+
+
+
+
 def save_visualization(
     color: np.ndarray,
     K: np.ndarray,
@@ -732,11 +752,14 @@ def main():
                     frame_id=frame_id,
                 )
 
+
     save_poses_json(
         output_root=output_root,
         frame_id=frame_data[0][0],
         object_positions=object_positions,
     )
+
+    make_tree_writable_for_shared_volume(output_root)
 
     print("\n[FP] Multi-object sequence processing completed")
 
