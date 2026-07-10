@@ -190,13 +190,58 @@ def pose_to_scene_position(pose: np.ndarray) -> List[float]:
     return [round(fp_z, 6), round(-fp_x, 6), round(-fp_y, 6)]
 
 
+def pose_to_scene_yaw_raw(pose: np.ndarray) -> float:
+    pose_matrix = pose.reshape(4, 4)
+    fp_rotation = pose_matrix[:3, :3]
+
+    fp_to_robot_rotation = np.array(
+        [
+            [0.0, 0.0, 1.0],
+            [-1.0, 0.0, 0.0],
+            [0.0, -1.0, 0.0],
+        ],
+        dtype=np.float32,
+    )
+    robot_rotation = fp_to_robot_rotation @ fp_rotation
+
+    yaw = np.arctan2(robot_rotation[1, 0], robot_rotation[0, 0])
+    return float(yaw)
+
+
+def normalize_yaw_near_zero(yaw: float) -> float:
+    symmetry_period = np.pi / 2.0
+    normalized_yaw = yaw - round(yaw / symmetry_period) * symmetry_period
+
+    if abs(normalized_yaw) < 0.02:
+        return 0.0
+
+    return float(normalized_yaw)
+
+
+def yaw_orientation_quadrant(yaw: float) -> int:
+    symmetry_period = np.pi / 2.0
+    return int(round(yaw / symmetry_period) % 4)
+
+
+def pose_to_scene_pose(pose: np.ndarray) -> Dict[str, Any]:
+    yaw_raw = pose_to_scene_yaw_raw(pose)
+    yaw = normalize_yaw_near_zero(yaw_raw)
+
+    return {
+        "position": pose_to_scene_position(pose),
+        "yaw": round(yaw, 6),
+        "yaw_raw": round(yaw_raw, 6),
+        "orientation_quadrant": yaw_orientation_quadrant(yaw_raw),
+    }
+
+
 def save_poses_json(
     output_root: Path,
     frame_id: str,
-    object_positions: Dict[str, List[float]],
+    object_poses: Dict[str, Dict[str, Any]],
 ) -> Path:
     payload = {
-        f"{frame_id}.png": object_positions,
+        f"{frame_id}.png": object_poses,
     }
 
     poses_path = output_root / "poses.json"
@@ -659,7 +704,7 @@ def main():
 
         frame_data.append((frame_id, color, depth))
 
-    object_positions = {}
+    object_poses = {}
 
     for object_name, first_mask_path in object_masks:
         mesh_path = mesh_by_object[object_name]
@@ -739,7 +784,7 @@ def main():
             save_pose(pose, pose_dir, frame_id)
 
             if frame_id == frame_data[0][0]:
-                object_positions[object_name] = pose_to_scene_position(pose)
+                object_poses[object_name] = pose_to_scene_pose(pose)
 
             if args.debug >= 1:
                 save_visualization(
@@ -756,7 +801,7 @@ def main():
     save_poses_json(
         output_root=output_root,
         frame_id=frame_data[0][0],
-        object_positions=object_positions,
+        object_poses=object_poses,
     )
 
     make_tree_writable_for_shared_volume(output_root)
