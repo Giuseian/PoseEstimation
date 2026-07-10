@@ -1,4 +1,4 @@
-#python save_realsense_rgbd.py --save_dir ~/shared_data --max_frames 1
+#python /home/user/PoseEstimation/pipeline/save_realsense_rgbd.py --save_dir ~/shared_data --max_frames 1
 
 import argparse
 import os
