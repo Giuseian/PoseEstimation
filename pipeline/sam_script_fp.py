@@ -21,6 +21,7 @@ import numpy as np
 from PIL import Image
 
 import torch
+from torch.nn.attention import sdpa_kernel, SDPBackend
 
 import sam3
 from sam3 import build_sam3_image_model
@@ -29,6 +30,42 @@ from sam3.model.sam3_image_processor import Sam3Processor
 
 def log(message: str) -> None:
     print(f"[SAM3] {message}")
+
+
+def cast_real_floating_params_to_half(module: torch.nn.Module) -> torch.nn.Module:
+    """
+    Cast real floating-point parameters/buffers to float16 to reduce VRAM usage.
+
+    float16 (not bfloat16) because Turing GPUs (compute capability 7.5, e.g.
+    RTX 2060) lack bf16 tensor core support: the memory-efficient SDPA kernel
+    rejects bf16 inputs on this hardware ("Expected query, key and value to
+    all be of dtype: {Half, Float}").
+
+    Unlike module.to(torch.float16), this skips complex-valued buffers (e.g.
+    SAM3's rotary position embedding `freqs_cis`), which module.to() would
+    silently truncate to their real part and corrupt.
+    """
+
+    def convert(t: torch.Tensor) -> torch.Tensor:
+        if t.is_floating_point() and not t.is_complex():
+            return t.to(torch.float16)
+        return t
+
+    return module._apply(convert)
+
+
+def fix_decoder_coord_cache_device(model, device: str) -> None:
+    """
+    Work around a SAM3 bug: the decoder's `compilable_cord_cache` is
+    precomputed in __init__ with a hardcoded device="cuda" (see
+    submodules/SAM3/sam3/model/decoder.py, around line 280), and since it's
+    a plain Python attribute (not a registered buffer), model.to(device)
+    never moves it. On a CPU-only run this leaves it stuck on cuda:0.
+    """
+    decoder = getattr(getattr(model, "transformer", None), "decoder", None)
+    cache = getattr(decoder, "compilable_cord_cache", None)
+    if cache is not None:
+        decoder.compilable_cord_cache = tuple(t.to(device) for t in cache)
 
 
 def slugify_prompt(prompt: str) -> str:
@@ -341,22 +378,40 @@ def main():
         help="Image id to process, e.g. 000000.",
     )
 
+    parser.add_argument(
+        "--device",
+        type=str,
+        default="auto",
+        choices=["auto", "cuda", "cpu"],
+        help=(
+            "Device to run on. 'auto' uses CUDA if available. 'cpu' forces "
+            "CPU execution (no VRAM limits, but slow) and skips the "
+            "fp16/autocast/sdpa GPU-memory optimizations below."
+        ),
+    )
+
     args = parser.parse_args()
 
     try:
         log("Starting SAM3 segmentation script")
 
-        if torch.cuda.is_available():
-            log("CUDA is available")
+        use_cuda = (args.device == "cuda") or (
+            args.device == "auto" and torch.cuda.is_available()
+        )
+        device = "cuda" if use_cuda else "cpu"
+        log(f"Device: {device}")
+
+        if use_cuda:
             torch.backends.cuda.matmul.allow_tf32 = True
             torch.backends.cudnn.allow_tf32 = True
-            autocast_context = torch.autocast("cuda", dtype=torch.bfloat16)
+            autocast_context = torch.autocast("cuda", dtype=torch.float16)
             autocast_context.__enter__()
-        else:
-            log("CUDA is not available, using CPU")
+            log("Forcing memory-efficient attention backend (Turing GPU, no FlashAttention)")
+            sdpa_context = sdpa_kernel(SDPBackend.EFFICIENT_ATTENTION)
+            sdpa_context.__enter__()
 
         gc.collect()
-        if torch.cuda.is_available():
+        if use_cuda:
             torch.cuda.empty_cache()
 
         data_root = Path(args.data_root)
@@ -378,7 +433,8 @@ def main():
         if not rgb_dir.exists():
             raise FileNotFoundError(f"RGB directory does not exist: {rgb_dir}")
 
-        sam3_root = Path(sam3.__file__).resolve().parent.parent
+        repo_root = Path(__file__).resolve().parent.parent
+        sam3_root = repo_root / "submodules" / "SAM3"
         bpe_path = sam3_root / "sam3" / "assets" / "bpe_simple_vocab_16e6.txt.gz"
 
         log(f"SAM3 root: {sam3_root}")
@@ -388,8 +444,19 @@ def main():
         log(f"Prompt records: {prompts}")
         log(f"Output root: {masks_root}")
 
-        model = build_sam3_image_model(bpe_path=str(bpe_path))
-        processor = Sam3Processor(model, confidence_threshold=0.5)
+        model = build_sam3_image_model(bpe_path=str(bpe_path), device=device)
+        fix_decoder_coord_cache_device(model, device)
+        if use_cuda:
+            log("Casting real floating-point weights to float16 to reduce VRAM usage")
+            model = cast_real_floating_params_to_half(model)
+            gc.collect()
+            torch.cuda.empty_cache()
+            log(
+                "GPU memory after cast+cleanup: "
+                f"allocated={torch.cuda.memory_allocated() / 1024**2:.0f} MiB, "
+                f"reserved={torch.cuda.memory_reserved() / 1024**2:.0f} MiB"
+            )
+        processor = Sam3Processor(model, confidence_threshold=0.5, device=device)
 
         image_paths = [rgb_dir / f"{args.image_id}.png"]
 
