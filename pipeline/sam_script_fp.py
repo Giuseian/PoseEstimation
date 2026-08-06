@@ -75,6 +75,15 @@ def slugify_prompt(prompt: str) -> str:
     return slug or "object"
 
 
+def normalize_image_id(image_id: str) -> str:
+    image_name = image_id.strip()
+    if not image_name:
+        raise ValueError("image_id must be non-empty.")
+    if image_name.lower().endswith(".png"):
+        image_name = image_name[:-4]
+    return image_name
+
+
 def get_latest_timestamp(root: Path) -> str:
     if not root.exists():
         raise FileNotFoundError(f"Timestamp root does not exist: {root}")
@@ -317,7 +326,7 @@ def segment_image(
 
 def main():
     parser = argparse.ArgumentParser()
-    default_data_root = Path("/workspace/shared_data/realsense")
+    default_data_root = Path("/workspace/eurobin_shared/zed")
 
     parser.add_argument(
         "--data_root",
@@ -390,6 +399,13 @@ def main():
         ),
     )
 
+    parser.add_argument(
+        "--checkpoint_path",
+        type=str,
+        default=None,
+        help="Optional local SAM3 checkpoint path. If omitted, the script downloads from Hugging Face.",
+    )
+
     args = parser.parse_args()
 
     try:
@@ -444,7 +460,12 @@ def main():
         log(f"Prompt records: {prompts}")
         log(f"Output root: {masks_root}")
 
-        model = build_sam3_image_model(bpe_path=str(bpe_path), device=device)
+        model = build_sam3_image_model(
+            bpe_path=str(bpe_path),
+            checkpoint_path=args.checkpoint_path,
+            load_from_HF=args.checkpoint_path is None,
+            device=device,
+        )
         fix_decoder_coord_cache_device(model, device)
         if use_cuda:
             log("Casting real floating-point weights to float16 to reduce VRAM usage")
@@ -458,7 +479,8 @@ def main():
             )
         processor = Sam3Processor(model, confidence_threshold=0.5, device=device)
 
-        image_paths = [rgb_dir / f"{args.image_id}.png"]
+        image_id = normalize_image_id(args.image_id)
+        image_paths = [rgb_dir / f"{image_id}.png"]
 
         if len(image_paths) == 0:
             raise RuntimeError(f"No PNG images found in: {rgb_dir}")
